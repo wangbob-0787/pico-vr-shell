@@ -6,157 +6,162 @@ import android.content.Intent
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
-import android.view.Gravity
+import android.view.InputEvent
+import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.ScrollView
+import android.view.View
+import android.widget.FrameLayout
 import android.widget.TextView
+import android.view.Gravity
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * 最小验证探针：能不能把官方 Emby 拉到我们自己建的虚拟显示器上。
- *
- * 通过 = 下半屏出现 Emby 的界面 → VR 影院方案成立
- * 不通过 = 日志区给出具体异常与失败的标志组合 → 走备选方案
+ * VR 壳探针 v4
+ *  - Emby 铺满整个虚拟屏（调试区默认隐藏，点左上角热点可唤出）
+ *  - 尝试把手柄/触摸事件转发进虚拟显示器
  */
 class MainActivity : Activity(), SurfaceHolder.Callback {
 
-    private lateinit var logView: TextView
     private lateinit var surfaceView: SurfaceView
+    private lateinit var status: TextView
     private var vd: VirtualDisplay? = null
+    private val ui = Handler(Looper.getMainLooper())
+    private val lines = ArrayDeque<String>()
 
     private fun log(msg: String) {
         Log.i(TAG, msg)
-        runOnUiThread {
-            logView.append("[" + SimpleDateFormat("HH:mm:ss", Locale.US).format(Date()) + "] " + msg + "\n")
+        ui.post {
+            lines.addLast("[" + SimpleDateFormat("HH:mm:ss", Locale.US).format(Date()) + "] " + msg)
+            while (lines.size > 6) lines.removeFirst()
+            status.text = lines.joinToString("\n")
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFF101010.toInt())
-        }
 
-        logView = TextView(this).apply {
-            setTextColor(0xFF33FF33.toInt())
-            textSize = 10f
-            setPadding(16, 16, 16, 8)
-        }
-        root.addView(ScrollView(this).apply { addView(logView) },
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 45f))
+        val root = FrameLayout(this)
 
+        // 虚拟显示器的画面：铺满整屏
         surfaceView = SurfaceView(this)
         surfaceView.holder.addCallback(this)
-        root.addView(surfaceView,
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 55f))
+        surfaceView.isFocusable = true
+        surfaceView.isFocusableInTouchMode = true
+        root.addView(surfaceView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
 
-        val bar = LinearLayout(this).apply { gravity = Gravity.CENTER }
-        bar.addView(Button(this).apply {
-            text = "重新拉 Emby"
-            setOnClickListener { launchEmby("手动") }
-        })
-        bar.addView(Button(this).apply {
-            text = "退出"
-            setOnClickListener { finish() }
-        })
-        root.addView(bar)
+        // 状态浮层：默认隐藏，点左上角唤出 6 秒
+        status = TextView(this).apply {
+            setTextColor(0xFF33FF33.toInt())
+            textSize = 10f
+            setBackgroundColor(0xCC000000.toInt())
+            setPadding(12, 8, 12, 8)
+            visibility = View.GONE
+        }
+        val lp = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
+        lp.gravity = Gravity.TOP or Gravity.START
+        root.addView(status, lp)
+
+        // 左上角 80x80 热点：点它切换调试浮层
+        val hot = View(this)
+        hot.setOnClickListener {
+            status.visibility = if (status.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            if (status.visibility == View.VISIBLE) {
+                ui.removeCallbacksAndMessages(null)
+                ui.postDelayed({ status.visibility = View.GONE }, 6000)
+            }
+        }
+        val hlp = FrameLayout.LayoutParams(80, 80)
+        hlp.gravity = Gravity.TOP or Gravity.START
+        root.addView(hot, hlp)
 
         setContentView(root)
 
-        log("探针启动")
-        log("targetSdk = " + applicationInfo.targetSdkVersion)
-    }
+        log("v4 启动 targetSdk=" + applicationInfo.targetSdkVersion)
 
-    // ---------- 虚拟显示器：遍历标志组合 ----------
+        // 触摸转发：把落在 SurfaceView 上的事件送进虚拟显示器
+        surfaceView.setOnTouchListener { _, ev ->
+            forwardTouch(ev)
+            true
+        }
+    }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        log("Surface 就绪 → 遍历标志组合")
-
-        val variants = listOf(
-            Triple("无标志(0)", 0, "最宽松"),
-            Triple("OWN_CONTENT_ONLY",
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY, "只放自己内容，不需权限"),
-            Triple("PUBLIC",
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC, "允许别的 App(需系统权限)"),
-            Triple("PUBLIC|OWN_CONTENT_ONLY",
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY, "组合")
-        )
-
-        val dm = getSystemService(DisplayManager::class.java)
-        for ((name, flags, note) in variants) {
-            try {
-                val d = dm.createVirtualDisplay("vd", VD_W, VD_H, VD_DPI,
-                    holder.surface, flags)
-                log("[" + name + "] 建成 id=" + d.display.displayId + " (" + note + ")")
-                vd = d
-                launchEmby(name)
-                return
-            } catch (t: Throwable) {
-                log("[" + name + "] 失败: " + t.javaClass.simpleName + ": " +
-                    (t.message ?: "").take(80))
-            }
+        log("Surface 就绪")
+        try {
+            val dm = getSystemService(DisplayManager::class.java)
+            vd = dm.createVirtualDisplay("vd", VD_W, VD_H, VD_DPI, holder.surface, 0)
+            log("显示器 id=" + vd?.display?.displayId)
+        } catch (t: Throwable) {
+            log("建显示器失败: " + t.javaClass.simpleName + " " + (t.message ?: "").take(60))
+            return
         }
-        log("全部组合都失败 → 第三方 App 自建显示器不可行")
+        launchEmby()
     }
 
-    // ---------- 把 Emby 拉到那个显示器上 ----------
-
-    private fun launchEmby(from: String) {
-        val target = "tv.emby.embyatv"
-        val intent = packageManager.getLaunchIntentForPackage(target)
-        if (intent == null) {
-            log("找不到 " + target)
-            return
-        }
+    private fun launchEmby() {
+        val intent = packageManager.getLaunchIntentForPackage("tv.emby.embyatv")
+        if (intent == null) { log("没有 Emby"); return }
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
-
-        val d = vd
-        if (d == null) {
-            log("显示器还没建好")
-            return
-        }
-        val displayId = d.display.displayId
-
+        val d = vd ?: return
         val opts = ActivityOptions.makeBasic()
         try {
-            val m = ActivityOptions::class.java
+            ActivityOptions::class.java
                 .getMethod("setLaunchDisplayId", Int::class.javaPrimitiveType)
-            m.invoke(opts, displayId)
-            log("[" + from + "] setLaunchDisplayId(" + displayId + ") 成功")
+                .invoke(opts, d.display.displayId)
         } catch (t: Throwable) {
-            val c = t.cause ?: t
-            log("[" + from + "] setLaunchDisplayId 失败: " + c.javaClass.simpleName + ": " + c.message)
-            return
+            log("setLaunchDisplayId 失败: " + ((t.cause ?: t).message ?: "").take(60)); return
         }
-
         try {
             startActivity(intent, opts.toBundle())
-            log("[" + from + "] 已发起启动 → 看下半屏")
+            log("已启动 Emby")
         } catch (t: Throwable) {
-            val c = t.cause ?: t
-            log("[" + from + "] startActivity 失败: " + c.javaClass.simpleName + ": " + c.message)
+            log("startActivity 失败: " + ((t.cause ?: t).message ?: "").take(60))
+        }
+    }
+
+    /** 把事件转投到虚拟显示器：先缩放到虚拟显示器坐标，再尝试注入 */
+    private fun forwardTouch(ev: MotionEvent) {
+        val d = vd ?: return
+        val w = surfaceView.width.takeIf { it > 0 } ?: return
+        val h = surfaceView.height.takeIf { it > 0 } ?: return
+        val copy = MotionEvent.obtain(ev)
+        copy.setLocation(ev.x * VD_W / w, ev.y * VD_H / h)
+        try {
+            try {
+                InputEvent::class.java
+                    .getMethod("setDisplayId", Int::class.javaPrimitiveType)
+                    .invoke(copy, d.display.displayId)
+            } catch (_: Throwable) { }
+
+            val im = getSystemService("input")
+            val m = im.javaClass.getMethod("injectInputEvent",
+                InputEvent::class.java, Int::class.javaPrimitiveType)
+            m.invoke(im, copy, 0)   // ASYNC
+            log("转发 " + copy.action + " @" + copy.x.toInt() + "," + copy.y.toInt())
+        } catch (t: Throwable) {
+            log("注入失败: " + (t.cause ?: t).javaClass.simpleName + " " +
+                ((t.cause ?: t).message ?: "").take(50))
+        } finally {
+            copy.recycle()
         }
     }
 
     override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, hh: Int) {}
 
     override fun surfaceDestroyed(h: SurfaceHolder) {
-        vd?.release()
-        vd = null
+        vd?.release(); vd = null
     }
 
     override fun onDestroy() {
-        super.onDestroy()
-        vd?.release()
-        vd = null
+        super.onDestroy(); vd?.release(); vd = null
     }
 
     companion object {

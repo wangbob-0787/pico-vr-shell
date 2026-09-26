@@ -7,7 +7,7 @@
 
     <application
         android:label="VR Shell Probe"
-        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen"
         android:resizeableActivity="true">
         <activity
             android:name=".MainActivity"
