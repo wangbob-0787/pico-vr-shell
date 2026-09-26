@@ -127,28 +127,41 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
-    /** 把事件转投到虚拟显示器：先缩放到虚拟显示器坐标，再尝试注入 */
+    /** 把事件转投到虚拟显示器：先缩放到虚拟显示器坐标，再注入 */
     private fun forwardTouch(ev: MotionEvent) {
         val d = vd ?: return
         val w = surfaceView.width.takeIf { it > 0 } ?: return
         val h = surfaceView.height.takeIf { it > 0 } ?: return
         val copy = MotionEvent.obtain(ev)
         copy.setLocation(ev.x * VD_W / w, ev.y * VD_H / h)
-        try {
-            try {
-                InputEvent::class.java
-                    .getMethod("setDisplayId", Int::class.javaPrimitiveType)
-                    .invoke(copy, d.display.displayId)
-            } catch (_: Throwable) { }
 
+        val targetId = d.display.displayId
+        var setIdOk = false
+        try {
+            InputEvent::class.java
+                .getMethod("setDisplayId", Int::class.javaPrimitiveType)
+                .invoke(copy, targetId)
+            setIdOk = true
+        } catch (t: Throwable) {
+            log("setDisplayId 异常: " + ((t.cause ?: t).message ?: "").take(50))
+        }
+
+        var actualId = -1
+        try {
+            actualId = InputEvent::class.java.getMethod("getDisplayId").invoke(copy) as Int
+        } catch (_: Throwable) { }
+
+        try {
             val im = getSystemService("input")
             val m = im.javaClass.getMethod("injectInputEvent",
                 InputEvent::class.java, Int::class.javaPrimitiveType)
-            m.invoke(im, copy, 0)   // ASYNC
-            log("转发 " + copy.action + " @" + copy.x.toInt() + "," + copy.y.toInt())
+            // mode 1 = WAIT_FOR_RESULT，能拿到真实结果
+            val ret = m.invoke(im, copy, 1)
+            log("注入 ret=" + ret + " setIdOk=" + setIdOk + " evDisp=" + actualId +
+                " want=" + targetId + " act=" + copy.action)
         } catch (t: Throwable) {
-            log("注入失败: " + (t.cause ?: t).javaClass.simpleName + " " +
-                ((t.cause ?: t).message ?: "").take(50))
+            val c = t.cause ?: t
+            log("注入抛异常: " + c.javaClass.simpleName + " " + (c.message ?: "").take(60))
         } finally {
             copy.recycle()
         }
