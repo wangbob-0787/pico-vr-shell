@@ -76,56 +76,35 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        log("Surface 就绪 → 建虚拟显示器")
-        try {
-            val dm = getSystemService(DisplayManager::class.java)
-            vd = dm.createVirtualDisplay(
-                "emby-vd",
-                VD_W, VD_H, VD_DPI,
-                holder.surface,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC
-            )
-            log("虚拟显示器 OK  id=" + vd?.display?.displayId + "  " + VD_W + "x" + VD_H)
-        } catch (t: Throwable) {
-            log("建虚拟显示器失败: " + t.javaClass.simpleName + ": " + t.message)
-            return
-        }
-        launchEmby()
-    }
+        log("Surface 就绪 → 遍历标志组合建虚拟显示器")
 
-    private fun launchEmby() {
-        val target = "tv.emby.embyatv"
-        val intent = packageManager.getLaunchIntentForPackage(target)
-        if (intent == null) {
-            log("找不到 " + target + "（未安装？）")
-            return
-        }
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
-        val displayId = vd?.display?.displayId ?: -1
-        if (displayId < 0) {
-            log("虚拟显示器还没建好")
-            return
-        }
+        // 逐个试：不同标志组合的权限要求不同
+        val variants = listOf(
+            Triple("无标志(0)", 0, "最宽松，看能否承载别的 App"),
+            Triple("OWN_CONTENT_ONLY", DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY,
+                "只放自己的内容，不需权限"),
+            Triple("PUBLIC", DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC,
+                "允许别的 App(需系统权限)"),
+            Triple("PUBLIC|OWN_CONTENT_ONLY",
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY,
+                "组合")
+        )
 
-        val opts = ActivityOptions.makeBasic()
-        try {
-            // 用反射调用，避免编译期依赖 @SystemApi
-            val m = ActivityOptions::class.java.getMethod("setLaunchDisplayId", Int::class.javaPrimitiveType)
-            m.invoke(opts, displayId)
-            log("setLaunchDisplayId(" + displayId + ") 调用成功")
-        } catch (t: Throwable) {
-            val cause = t.cause ?: t
-            log("setLaunchDisplayId 失败: " + cause.javaClass.simpleName + ": " + cause.message)
-            return
+        val dm = getSystemService(DisplayManager::class.java)
+        for ((name, flags, note) in variants) {
+            try {
+                val d = dm.createVirtualDisplay("vd-$name", VD_W, VD_H, VD_DPI,
+                    holder.surface, flags)
+                log("[" + name + "] 建成 id=" + d.display.displayId + " (" + note + ")")
+                // 建成即停手：用它试拉 Emby
+                vd = d
+                launchEmby(name)
+                return
+            } catch (t: Throwable) {
+                log("[" + name + "] 失败: " + t.javaClass.simpleName + ": " + (t.message ?: "").take(90))
+            }
         }
-
-        try {
-            startActivity(intent, opts.toBundle())
-            log("已发起启动 → 看下半屏出不出 Emby 画面")
-        } catch (t: Throwable) {
-            val cause = t.cause ?: t
-            log("startActivity 失败: " + cause.javaClass.simpleName + ": " + cause.message)
-        }
+        log("全部标志组合都失败 → 第三方 App 无法自建可承载别的 App 的显示器")
     }
 
     override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, hh: Int) {}
