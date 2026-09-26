@@ -85,7 +85,8 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
 
         setContentView(root)
 
-        log("v4 启动 targetSdk=" + applicationInfo.targetSdkVersion)
+        log("v8 启动 targetSdk=" + applicationInfo.targetSdkVersion)
+        logPermState()
 
         // 触摸转发：把落在 SurfaceView 上的事件送进虚拟显示器
         surfaceView.setOnTouchListener { _, ev ->
@@ -126,6 +127,27 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         } catch (t: Throwable) {
             log("startActivity 失败: " + ((t.cause ?: t).message ?: "").take(60))
         }
+    }
+
+    /**
+     * v8：验证 PICO 是否真的把 INJECT_EVENTS 授予了我们。
+     * - granted：PackageManager.checkPermission 的真实结果
+     * - protectionLevel：PICO 框架里这个权限的定义（0x2=signature，0x12=signature|privileged…）
+     * - system：本应用是否被系统当成系统应用
+     */
+    private fun logPermState() {
+        val name = "android.permission.INJECT_EVENTS"
+        val granted = try {
+            packageManager.checkPermission(name, packageName) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        } catch (t: Throwable) { false }
+        var lvl = "查询失败"
+        try {
+            lvl = "0x" + Integer.toHexString(
+                packageManager.getPermissionInfo(name, 0).protectionLevel)
+        } catch (t: Throwable) { }
+        val sys = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+        log("权限 INJECT_EVENTS granted=" + granted + " level=" + lvl + " isSystem=" + sys)
     }
 
     /** 把事件转投到虚拟显示器：先缩放到虚拟显示器坐标，再注入 */

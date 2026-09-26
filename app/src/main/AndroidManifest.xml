@@ -5,6 +5,10 @@
         <package android:name="tv.emby.embyatv" />
     </queries>
 
+    <!-- v8 实验：官方 Unity 文档「Android 标准权限」表里蓝牙(体感追踪器)一行要求声明此项。
+         标准 AOSP 中它是 signature 级（声明也拿不到），本次实验验证 PICO 是否放行。 -->
+    <uses-permission android:name="android.permission.INJECT_EVENTS" />
+
     <application
         android:label="VR Shell Probe"
         android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen"
