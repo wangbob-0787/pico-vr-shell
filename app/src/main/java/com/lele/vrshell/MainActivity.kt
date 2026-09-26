@@ -33,6 +33,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var vd: VirtualDisplay? = null
     private val ui = Handler(Looper.getMainLooper())
     private val lines = ArrayDeque<String>()
+    private var probed = false
 
     private fun log(msg: String) {
         Log.i(TAG, msg)
@@ -136,14 +137,33 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
         copy.setLocation(ev.x * VD_W / w, ev.y * VD_H / h)
 
         val targetId = d.display.displayId
+        if (!probed) {
+            probed = true
+            val names = StringBuilder()
+            for (c in listOf(InputEvent::class.java, MotionEvent::class.java)) {
+                for (mm in c.methods) {
+                    if (mm.name.contains("isplay", true)) {
+                        names.append(c.simpleName).append(".").append(mm.name)
+                            .append("(").append(mm.parameterTypes.joinToString(",") { it.simpleName })
+                            .append(") ")
+                    }
+                }
+            }
+            log("可用方法: " + names.toString().take(400))
+        }
+
         var setIdOk = false
-        try {
-            InputEvent::class.java
-                .getMethod("setDisplayId", Int::class.javaPrimitiveType)
-                .invoke(copy, targetId)
-            setIdOk = true
-        } catch (t: Throwable) {
-            log("setDisplayId 异常: " + ((t.cause ?: t).message ?: "").take(50))
+        for (mname in listOf("setDisplayId", "setDisplayid", "offsetLocation")) {
+            if (mname == "offsetLocation") continue
+            try {
+                val mm = InputEvent::class.java.getMethod(mname, Int::class.javaPrimitiveType)
+                mm.invoke(copy, targetId)
+                setIdOk = true
+                log("用 " + mname + " 设置成功")
+                break
+            } catch (t: Throwable) {
+                log(mname + " 失败: " + ((t.cause ?: t).message ?: "").take(60))
+            }
         }
 
         var actualId = -1
