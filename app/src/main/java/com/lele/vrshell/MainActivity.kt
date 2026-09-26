@@ -152,23 +152,20 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
             log("可用方法: " + names.toString().take(400))
         }
 
+        // 关键：setDisplayId 在 MotionEvent 上（v6 枚举得出），不在 InputEvent 上
         var setIdOk = false
-        for (mname in listOf("setDisplayId", "setDisplayid", "offsetLocation")) {
-            if (mname == "offsetLocation") continue
-            try {
-                val mm = InputEvent::class.java.getMethod(mname, Int::class.javaPrimitiveType)
-                mm.invoke(copy, targetId)
-                setIdOk = true
-                log("用 " + mname + " 设置成功")
-                break
-            } catch (t: Throwable) {
-                log(mname + " 失败: " + ((t.cause ?: t).message ?: "").take(60))
-            }
+        try {
+            MotionEvent::class.java
+                .getMethod("setDisplayId", Int::class.javaPrimitiveType)
+                .invoke(copy, targetId)
+            setIdOk = true
+        } catch (t: Throwable) {
+            log("MotionEvent.setDisplayId 失败: " + ((t.cause ?: t).message ?: "").take(60))
         }
 
         var actualId = -1
         try {
-            actualId = InputEvent::class.java.getMethod("getDisplayId").invoke(copy) as Int
+            actualId = MotionEvent::class.java.getMethod("getDisplayId").invoke(copy) as Int
         } catch (_: Throwable) { }
 
         try {
